@@ -9,23 +9,41 @@ import geopandas as gpd
 import contextily as ctx
 
 class StationData:
-    def __init__(self, pickle_filename):
-        self.pickle_filename = pickle_filename
+    def __init__(self):
+        self.metadata_filename = "metadata.pickle"
+        self.data_filename = "data.pickle"
 
-    def read_pickle(self):
+    def _read_pickle(self, kind="metadata"):
         print("read pickle")
-        return pd.read_pickle(self.pickle_filename)
+        if kind == "metadata":
+            return pd.read_pickle(self.metadata_filename)
+        else:
+            return pd.read_pickle(self.data_filename)
 
-    def write_pickle(self, stations):
-        df = pd.DataFrame(stations)
-        df['LATITUDE'] = df['LATITUDE'].astype(float) 
-        df['LONGITUDE'] = df['LONGITUDE'].astype(float)
-        df.to_pickle(self.pickle_filename)
-        print(f"Wrote dataframe: {self.pickle_filename}")
+    def _write_pickle(self, df, kind="metadata"):
+        if kind == "metadata":
+            name = self.metadata_filename
+        else:
+            name = self.data_filename
+        df.to_pickle(name)
+        print(f"Wrote dataframe: {name}")
         print(df.head())
         print(df.dtypes)
 
-    def write_json(self, data):
+    def _filter_df(self, df, kind="metadata"):
+        if kind == "metadata":
+            # Filter relevant columns
+            df = df.loc[:, ['NAME', 'STID', 'LATITUDE', 'LONGITUDE']]
+        else:
+            # only record stations with observations
+            df = df[df["OBSERVATIONS"].notnull()]
+            df = df.loc[:, ['NAME', 'STID', 'LATITUDE', 'LONGITUDE', 'OBSERVATIONS']]
+        # Set types
+        df['LATITUDE'] = df['LATITUDE'].astype(float) 
+        df['LONGITUDE'] = df['LONGITUDE'].astype(float)
+        return df
+
+    def _write_json(self, data):
         json_formatted_str = json.dumps(data, indent=2)
         with open('station_metadata.json', 'w') as file:
                 file.write(json_formatted_str)
@@ -38,7 +56,7 @@ class StationData:
             print(f"Lat/Lon : {station['LATITUDE']},{station['LONGITUDE']}")
             print("-----------------------------------")
 
-    def do_request(self):
+    def _do_request(self, kind="metadata"):
         latlon = (40.667882, -111.924244)
         distance = 16
         limit = 1000
@@ -50,20 +68,32 @@ class StationData:
             "token": api_token,
         }
         encoded_params = urllib.parse.urlencode(query_params)
-        url = f"https://api.synopticlabs.org/v2/stations/metadata?{encoded_params}"
+        url = f"https://api.synopticlabs.org/v2/stations/{kind}?{encoded_params}"
         print(url)
         with urllib.request.urlopen(url) as response:
             data = json.loads(response.read().decode())
             if data["SUMMARY"]["RESPONSE_CODE"] == 1:
                 stations = data['STATION']
-                self.write_pickle(stations)
-                self.write_json(stations)
+                self._write_json(stations)
+                df = pd.DataFrame(stations)
+                return df
             else:
-                print("Error: Failed to retrieve weather stations.")
+                print("Error: Failed to retrieve station metadata")
+                return False
+
+    def get_data(self, kind="metadata"):
+        filename = self.metadata_filename if kind == "metadata" else self.data_filename
+        if not os.path.exists(filename):
+            data = self._do_request(kind=kind)
+            df = pd.DataFrame(data)
+            df_f = self._filter_df(df)
+            self._write_pickle(df_f, kind)
+            return df_f
+        else:
+            return self._read_pickle(kind=kind)
 
 class MapPlotter:
-    def __init__(self, pickle_filename):
-        self.pickle_filename = pickle_filename
+    # def __init__(self):
 
     def draw_folium(self, df):
         map_center = [float(df.loc[0, 'LATITUDE']), float(df.loc[0, 'LONGITUDE'])]
@@ -86,11 +116,12 @@ class MapPlotter:
         gdf_wm = gdf.to_crs(epsg=3857)
         orig_map = plt.colormaps.get_cmap('viridis')
         reversed_map = orig_map.reversed()
+
         ax = gdf_wm.plot(
             figsize=(30, 30),
             alpha=1,
             markersize=50,
-            column='DISTANCE',
+            # column='DISTANCE',
             cmap=reversed_map,
             edgecolors='black',
             legend=True,
@@ -105,19 +136,14 @@ class MapPlotter:
         )
 
     def main(self):
-        if os.path.exists(self.pickle_filename):
-            station_data = StationData(self.pickle_filename)
-            df = station_data.read_pickle()
-            df_f = df[['STID', 'NAME', 'DISTANCE', 'LATITUDE', 'LONGITUDE']]
-            print(df_f)
-            self.draw_folium(df_f)
-            self.draw_matplot(df_f)
-        else:
-            station_data = StationData(self.pickle_filename)
-            station_data.do_request()
+        std = StationData()
+        # df = std.get_data(kind="metadata")
+        df = std.get_data(kind="latest")
+        self.draw_matplot(df)
 
 if __name__ == "__main__":
-    pickle_filename = "metadata.pickle"
-    # pickle_filename = "metadata_3.pickle"
-    map_plotter = MapPlotter(pickle_filename)
+    # pd.set_option('display.max_columns', None)
+    # pd.set_option('display.max_rows', None)
+    # pd.set_option('display.expand_frame_repr', False)
+    map_plotter = MapPlotter()
     map_plotter.main()
