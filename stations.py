@@ -5,7 +5,8 @@ import urllib.parse
 import pandas as pd
 import folium
 import matplotlib.pyplot as plt
-
+import geopandas as gpd
+import contextily as ctx
 
 pickle_filename = "metadata_all.pickle"
 # pickle_filename = "metadata_3.pickle"
@@ -16,9 +17,12 @@ def read_pickle():
 
 def write_pickle(stations):
     df = pd.DataFrame(stations)
+    df['LATITUDE'] = df['LATITUDE'].astype(float) 
+    df['LONGITUDE'] = df['LONGITUDE'].astype(float)
     df.to_pickle(pickle_filename)
     print(f"Wrote dataframe: {pickle_filename}")
     print(df.head())
+    print(df.dtypes)
 
 def write_json(data):
     json_formatted_str = json.dumps(data, indent=2)
@@ -26,7 +30,7 @@ def write_json(data):
             file.write(json_formatted_str)
     print("wrote json")
 
-def process_stations(stations):
+def print_stations(stations):
     for station in stations:
         print(f"{station['STID']}: {station['NAME']}")
         print(f"Distance: {station['DISTANCE']}")
@@ -35,7 +39,7 @@ def process_stations(stations):
 
 def do_request():
     latlon = ( 40.667882, -111.924244)
-    distance = 20
+    distance = 16
     limit = 1000
     api_token = "d9c53d5242bc454f86c9346bd233a96f"
     query_params = {
@@ -53,7 +57,6 @@ def do_request():
             stations = data['STATION']
             write_pickle(stations)
             write_json(stations)
-            process_stations(stations)
         else:
             print("Error: Failed to retrieve weather stations.")
 
@@ -73,20 +76,29 @@ def draw_folium(df):
     m.save('map.html')
 
 def draw_matplot(df):
-    # Convert latitude and longitude columns to float
-    # df['LATITUDE'] = df['LATITUDE'].astype(float)
-    # df['LONGITUDE'] = df['LONGITUDE'].astype(float)
-
-    # Create scatter plot
-    plt.scatter(df['LONGITUDE'].astype(float), df['LATITUDE'].astype(float), c='blue', marker='o')
-
-    # Set plot title and labels
-    plt.title('Station Locations')
-    plt.xlabel('Longitude')
-    plt.ylabel('Latitude')
-
-    plt.savefig('map.png')
-    # Display the plot
+    # https://geopandas.org/en/stable/gallery/plotting_basemap_background.html
+    gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df['LONGITUDE'], df['LATITUDE']))
+    gdf.crs = 'EPSG:4326'
+    gdf_wm = gdf.to_crs(epsg=3857)
+    orig_map=plt.colormaps.get_cmap('viridis')
+    reversed_map = orig_map.reversed()
+    ax = gdf_wm.plot(
+        figsize=(30, 30),
+        alpha=1,
+        markersize=50,
+        column='DISTANCE',
+        cmap=reversed_map,
+        edgecolors='black',
+        legend=True,
+        legend_kwds={'shrink': 0.5}
+    )
+    ax.axis('off')
+    ctx.add_basemap(ax, zoom=11)
+    plt.savefig(
+        'map.png',
+        bbox_inches='tight',
+        pad_inches=0
+    )
     # plt.show()
 
 def main():
@@ -95,7 +107,6 @@ def main():
     # pd.set_option('display.expand_frame_repr', False)
     if os.path.exists(pickle_filename):
         df = read_pickle()
-        # print(df.columns)
         df_f = df[['STID', 'NAME', 'DISTANCE', 'LATITUDE', 'LONGITUDE']]
         print(df_f)
         draw_folium(df_f)
